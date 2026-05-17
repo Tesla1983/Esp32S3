@@ -83,13 +83,13 @@ A buzzer is a special component that produces sound when we send a HIGH signal t
 - **Active buzzer:** This type has a built-in oscillator that generates sound at a predefined frequency. We only need to send a HIGH or LOW signal to turn it ON or OFF. It is simple to use but offers limited control over the sound.
 - **Passive buzzer:** This type does not have a built-in oscillator. Instead, it allows us to generate sound at different frequencies by sending PWM (Pulse Width Modulation) signals from the ESP32-S3. This gives us more control over the tone, which makes it possible to play melodies or different alert sounds.
 
-Let’s build a simple project where an LED blinks and an active buzzer produces sound when a push button is pressed. We will connect the LED to GPIO 2, the buzzer to GPIO 20, and the push button to GPIO 4.
+Let’s build a simple project where an LED blinks and an active buzzer produces sound when a push button is pressed. We will connect the LED to GPIO 2, the buzzer to GPIO 20, and the push button to GPIO 5.
 
 <img src="./attachments/circuit2.png" height="300px"/>
 
-Now, let’s create our C program using ESP-IDF, We start by including the necessary libraries. For this example, we don’t need to keep track of any state, so we go directly to the `app_main` function. First, we reset the pins we will use, then configure GPIO 4 as an input and GPIO 2 and GPIO 20 as outputs. Next, we set GPIO 4 to pull-down mode so that it reads LOW (0) by default when the button is not pressed.
+Now, let’s create our C program using ESP-IDF, We start by including the necessary libraries. For this example, we don’t need to keep track of any state, so we go directly to the `app_main` function. First, we reset the pins we will use, then configure GPIO 4 as an input and GPIO 2 and GPIO 20 as outputs. Next, we set GPIO 5 to pull-down mode so that it reads LOW (0) by default when the button is not pressed.
 
-Finally, we create an infinite loop. Inside this loop, we use a nested loop that runs while the push button is pressed (when GPIO 4 is HIGH). When this happens, we set GPIO 20 HIGH to activate the buzzer, and we also blink the LED connected to GPIO 2 by turning it ON, waiting 500 ms, turning it OFF, and waiting another 500 ms. This creates a blinking effect.
+Finally, we create an infinite loop. Inside this loop, we use a nested loop that runs while the push button is pressed (when GPIO 5 is HIGH). When this happens, we set GPIO 20 HIGH to activate the buzzer, and we also blink the LED connected to GPIO 2 by turning it ON, waiting 500 ms, turning it OFF, and waiting another 500 ms. This creates a blinking effect.
 
 Outside the inner loop, we set GPIO 20 to LOW, which deactivates the buzzer when the push button is not pressed.
 ```C
@@ -99,17 +99,17 @@ Outside the inner loop, we set GPIO 20 to LOW, which deactivates the buzzer when
 #include "driver/gpio.h"
 
 void app_main(void){
-    gpio_reset_pin(4);
+    gpio_reset_pin(5);
     gpio_reset_pin(2);
     gpio_reset_pin(20);
     
     gpio_set_direction(2, GPIO_MODE_OUTPUT);
     gpio_set_direction(20, GPIO_MODE_OUTPUT);
-    gpio_set_direction(4, GPIO_MODE_INPUT);
+    gpio_set_direction(5, GPIO_MODE_INPUT);
     
-    gpio_set_pull_mode(4,GPIO_PULLDOWN_ONLY);
+    gpio_set_pull_mode(5,GPIO_PULLDOWN_ONLY);
     while (1) {
-        while(gpio_get_level(4)){
+        while(gpio_get_level(5)){
             gpio_set_level(20, 1);
             gpio_set_level(2, 1);
             vTaskDelay(500 / portTICK_PERIOD_MS);

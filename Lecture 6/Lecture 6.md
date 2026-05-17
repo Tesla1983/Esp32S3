@@ -382,3 +382,602 @@ RAM is exceptionally fast and is used for active calculations and temporary vari
 
 ### Working with Ram
 Now that we understand the general structure of memory in the ESP32-S3, let’s explore how RAM works and how we can manipulate it. The ESP32-S3 divides RAM into two main regions: the heap and the stack.
+
+#### Stack
+Throughout our lectures, we have been working with the stack without even noticing it. Every time we create a variable inside a function, it is typically stored in the stack, which is used for local and automatic memory allocation. Whenever a function is called, the microcontroller automatically reserves a portion of stack memory for that function’s local variables, function arguments, and return addresses. Once the function finishes executing, that memory is automatically released.
+
+The stack operates using a **Last-In, First-Out (LIFO)** mechanism, meaning the most recently added data is the first to be removed. Because of its simple structure, stack memory is extremely fast and efficient. However, the stack size is limited compared to the heap. Declaring very large local variables or deeply nested function calls can exhaust the available stack space, causing a stack overflow. On the ESP32-S3, a stack overflow usually results in a system panic, crash, or automatic reboot.
+
+#### Working with the Stack
+Let’s create a simple example to understand how the stack works. In this example, one function calls another function, allowing us to observe how the stack is managed during function execution.
+```c
+#include <stdio.h>  
+  
+void secondFunction() {  
+	int b = 20;  
+	printf("b = %d\n a = %d\n", b,a); // we can access a  
+}  
+  
+void firstFunction() {  
+	int a = 10;  
+	printf("a = %d\n", a); 
+	//b = 5 + a  we cant access be
+	secondFunction();  
+}  
+  
+void app_main(void) {  
+	firstFunction();  
+}
+```
+When `app_main()` calls `firstFunction()`, the microcontroller creates a new stack frame containing the local variable `a`, the function parameters, and the return address. While `firstFunction()` is still running, it calls `secondFunction()`, causing another stack frame to be placed on top of the previous one. This new frame stores the local variable `b` and the information needed for `secondFunction()` to execute.
+
+<img src="./attachments/stack_memory.png" />
+
+Once `secondFunction()` finishes, its stack frame is automatically removed, and the program returns to `firstFunction()`. After `firstFunction()` finishes, its stack frame is also released, and execution returns to `app_main()`.
+
+<img src="./attachments/stack_free.png"/>
+
+This process demonstrates why local variables exist only within their function or nested functions, and why we cannot access a variable after its function has finished executing. After a function returns, its stack memory is released and may later be reused by other functions
+
+#### Heap
+Unlike the stack, which automatically allocates and releases memory during function calls, the heap is used for dynamic memory allocation. Memory in the heap is managed manually by the programmer, meaning we explicitly request memory when needed and release it when it is no longer required.    
+
+Unlike the LIFO structure of the stack, the heap is a large pool of memory where blocks can be allocated and freed in any order. However, this flexibility comes with a cost. Allocating memory on the heap is slower than on the stack.
+
+The heap is especially useful when the amount of memory required is not known at compile time. Instead of creating fixed-size local variables, we can dynamically allocate memory during program execution. This is very common in embedded systems when handling buffers, communication packets, sensor data, image processing, or dynamically sized arrays.
+
+On the ESP32-S3, heap memory is managed by the ESP-IDF memory allocator. Functions such as `malloc()`, `calloc()`, `realloc()`, and `free()` are commonly used for dynamic memory management. ESP-IDF also provides advanced heap capabilities, allowing developers to allocate memory from different memory regions such as internal RAM, DMA-capable memory, or external PSRAM.
+
+Unlike the stack, heap memory does not automatically disappear when a function finishes. The allocated memory remains reserved until it is explicitly released using `free()`. Failing to release unused heap memory causes a memory leak, which gradually reduces the available memory and can eventually crash the system.
+
+
+#### Working with the Heap
+Let’s create a simple example to understand how heap memory works on the ESP32-S3 using ESP-IDF.
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+void app_main(void) {
+    // Allocate memory for 5 integers
+    int *numbers = (int *)malloc(5 * sizeof(int));
+    // Check if allocation was successful
+	if (numbers == NULL){
+		printf("Memory allocation failed!\n");
+		return;
+	}
+
+   // Store values inside the allocated memory
+    for (int i = 0; i < 5; i++){
+        numbers[i] = (i + 1) * 10;
+    }
+
+    // Print the stored values
+    for (int i = 0; i < 5; i++){
+        printf("numbers[%d] = %d\n", i, numbers[i]);
+    }
+
+    // Release the allocated memory
+    free(numbers);
+
+    printf("Heap memory released\n");
+}
+```
+In this example, the `malloc()` function dynamically reserves memory from the heap large enough to store five integers. The returned pointer, `numbers`, contains the address of the allocated memory block.
+```c
+int *numbers = (int *)malloc(5 * sizeof(int));
+```
+Unlike stack variables, this memory remains valid even if it was allocated inside another function, as long as it has not been released using `free()`.
+
+After allocating the memory, we store values inside the array normally using pointer indexing.
+```c
+numbers[i] = (i + 1) * 10;
+```
+Once the memory is no longer needed, we release it using `free()`.
+```
+free(numbers);
+```
+After calling `free()`, the heap manager marks that memory region as available again so it can later be reused by other parts of the program.
+
+#### Monitoring Heap Memory in ESP-IDF
+ESP-IDF provides built-in functions to monitor heap usage during runtime. This is extremely useful when debugging memory leaks or checking how much free memory is available.
+```c
+#include <stdio.h>
+#include "esp_heap_caps.h"
+
+void app_main(void){
+
+   printf("Free heap before allocation: %d bytes\n", heap_caps_get_free_size(MALLOC_CAP_8BIT));
+
+   int *data = malloc(100 * sizeof(int));
+   printf("Free heap after allocation: %d bytes\n", heap_caps_get_free_size(MALLOC_CAP_8BIT));
+   
+   free(data);
+   printf("Free heap after free(): %d bytes\n", heap_caps_get_free_size(MALLOC_CAP_8BIT));
+
+}
+```
+The function `heap_caps_get_free_size()` allows us to check the available heap memory in real time. This is particularly important on embedded systems where memory resources are limited.
+
+#### Controlling Heap Allocation
+While standard C functions like `malloc()` are easy to use, they have a major limitation in advanced embedded systems: they do not let us specify where in the microcontroller's hardware the memory should be allocated. The ESP32-S3 has a complex memory map that includes fast internal SRAM (divided into IRAM and DRAM) and often slower, but much larger, external PSRAM (SPI RAM).
+
+To solve this limitation, ESP-IDF provides a powerful function called `heap_caps_malloc()`. This function allows us to explicitly dictate which memory region our data should be placed in by applying specific capability flags.
+```c
+#include "esp_heap_caps.h"
+
+void *heap_caps_malloc(size_t size, uint32_t caps);
+```
+- **`size`**: The number of bytes you want to allocate.
+- **`caps`**: A bitmask of memory capability flags that dictate where and how the memory is allocated.
+
+Let's explore the most common use cases for controlling heap allocation on the ESP32-S3.
+
+**1. Allocating from Internal RAM Only** Sometimes we have performance-critical data that must be accessed as fast as possible. By default, if external PSRAM is enabled, `malloc()` might place our data there. We can force the allocator to only use the fast internal DRAM:
+```c
+#include <stdio.h>
+#include "esp_heap_caps.h"
+
+void app_main(void) {
+    // Force allocation strictly in fast internal DRAM
+    int *data = heap_caps_malloc(100 * sizeof(int), MALLOC_CAP_INTERNAL);
+
+    if (data == NULL) {
+        printf("Internal RAM allocation failed!\n");
+        return;
+    }
+
+    // ... use the data ...
+
+    free(data);
+}
+```
+**2. Allocating from External PSRAM** The ESP32-S3's internal memory is precious and usually reserved for FreeRTOS tasks and fast operations. If we need a massive chunk of memory, we should push it to the external PSRAM. This is incredibly useful for:
+
+- Large data buffers
+- Image processing or camera framebuffers
+- Audio data processing
+- Large network packets
+```c
+// Allocate a massive buffer in external PSRAM
+int *buffer = heap_caps_malloc(10000 * sizeof(int), MALLOC_CAP_SPIRAM);
+
+if (buffer == NULL) {
+    printf("PSRAM allocation failed!\n");
+} else {
+    printf("Successfully allocated large buffer in PSRAM.\n");
+    free(buffer);
+}
+```
+**3. DMA-Safe Allocation** When working with hardware peripherals like SPI, I2S (audio), or LCD interfaces, the hardware often uses Direct Memory Access (DMA). DMA allows peripherals to read and write memory independently of the CPU, which drastically speeds up data transfers. However, DMA hardware can only access specific physical memory regions.
+
+If we pass standard memory to a DMA controller, it might crash. We must request DMA-capable memory explicitly:
+```c
+// Allocate memory that is physically accessible by DMA hardware
+uint8_t *dma_buffer = heap_caps_malloc(2048, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+```
+Notice that we used the bitwise OR operator (`|`) to combine flags. This ensures the memory is both DMA-accessible and resides in internal RAM.   
+
+**4. Combining Multiple Constraints** The bitwise OR (`|`) allows us to stack as many constraints as our application requires. For example, if we need memory that is guaranteed to be byte-accessible (8-bit) and strictly internal:
+```c
+// Must be accessible as normal 8-bit memory AND come from internal RAM
+void *p = heap_caps_malloc(512, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+```
+
+#### Heap Fragmentation
+One important issue with dynamic memory allocation is heap fragmentation. Fragmentation occurs when many allocations and deallocations of different sizes leave small unused gaps in memory. Even if the total free memory appears large enough, there may not be a sufficiently large continuous block available for a new allocation.
+
+On long-running ESP32-S3 applications, excessive fragmentation can eventually cause allocation failures. To reduce fragmentation:
+
+- Avoid repeatedly allocating and freeing memory in fast loops.
+- Reuse buffers whenever possible.
+- Prefer fixed-size memory pools for predictable systems.
+- Free unused memory as soon as possible.
+- Monitor heap usage during runtime.
+
+Efficient heap management is very important in embedded systems because memory resources are limited compared to desktop computers. Poor memory management can lead to crashes, instability, unexpected reboots, or reduced system performance.
+### Task and Memory
+Now we must connect our understanding of memory to the FreeRTOS concepts we learned earlier. In a Bare-Metal system, there is only one main stack for the whole program. But in an RTOS, every single task gets its own dedicated Stack.
+
+When we call `xTaskCreatePinnedToCore()`, where does the memory for the new task's stack come from? It is carved out of the Heap. If we tell a task it needs 4096 bytes of stack space, the RTOS uses `malloc` behind the scenes to reserve 4096 bytes of heap memory specifically for that task's local variables.
+
+Because stack overflows are the most common bug in ESP-IDF development, FreeRTOS provides a function called `uxTaskGetStackHighWaterMark()`. This function tells us the minimum amount of remaining stack space that was ever available to the task since it started. If this number gets close to zero, we need to increase the task's stack size.
+```c
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdio.h>
+
+void memory_monitor_task(void *pvParameters) {
+    int local_array[100]; // Consumes 400 bytes on this task's stack
+    
+    while (1) {
+        // Pass NULL to check the stack of the currently running task
+        UBaseType_t high_water_mark = uxTaskGetStackHighWaterMark(NULL);
+        
+        // This prints the number of *bytes* (or words depending on architecture) remaining
+        printf("Task Stack High Water Mark: %u\n", high_water_mark);
+        
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
+void app_main(void) {
+    // We allocate 2048 bytes from the Heap to serve as this task's Stack
+    xTaskCreatePinnedToCore(memory_monitor_task, "MemTask", 2048, NULL, 1, NULL, 1);
+}
+```
+
+
+### Working with Flash and Persistent Data Storage
+Now that we understand how RAM works and how it temporarily holds our data while the program is running, let’s explore how the ESP32-S3 handles data that needs to survive a power cycle or reboot. Unlike RAM, which is volatile and wiped clean when the device loses power, Flash memory is non-volatile. This means it retains its data indefinitely without power.
+
+The ESP32-S3 uses external SPI Flash memory and sometimes internal embedded Flash to store the compiled application code, bootloader, and persistent user data. However, we cannot simply throw data anywhere into the Flash memory; it must be highly organized.
+
+#### The Partition Table
+Because the Flash memory holds several critical pieces of data, it is divided into distinct sections or "partitions." Think of the partition table as a map or an index that tells the ESP32-S3 exactly where everything lives.
+
+When we compile an ESP-IDF project, a `.csv` file defines this layout. A typical partition table divides the Flash into:
+- **Bootloader:** The code that runs immediately on startup to load the main application.
+- **Factory App:** The main executable compiled code of our program.
+- **OTA Partitions:** Reserved spaces for Over-The-Air updates, allowing the device to download a new app while the old one is still running.
+- **NVS (Non-Volatile Storage):** A small partition used for saving configuration settings.
+- **Data Partitions:** Larger spaces formatted for file systems like SPIFFS or LittleFS.
+
+By structuring the Flash memory this way, the microcontroller ensures that writing a text file to our data partition doesn't accidentally overwrite our application code.    
+Here is an example of what a `partitions.csv` file looks like:
+```
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     ,        0x6000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        1M,
+storage,  data, spiffs,  ,        1M,
+```
+
+#### NVS (Non-Volatile Storage)
+The Non-Volatile Storage (NVS) library is ESP-IDF's tool for saving small pieces of data. It operates like a dictionary, using **Key-Value pairs**. We save a piece of data (the value) and give it a unique string name (the key). Later, we can ask NVS to give us the value associated with that exact key.
+
+NVS is heavily optimized for flash memory. Because Flash memory can only be erased a certain number of times before it degrades, NVS uses a technique called wear leveling to distribute read/write operations evenly across the flash sectors, extending the life of our hardware. NVS is perfect for saving Wi-Fi credentials, calibration offsets, or state variables (like a restart counter).
+
+#### Working with NVS
+Let’s look at a simple example of using NVS to build a small project that counts user button presses and keeps the count saved even after the device is rebooted.
+
+In this project, we will create a simple circuit with two buttons:
+
+- **Count Up button** connected to **GPIO 4**
+- **Reset button** connected to **GPIO 5**
+
+Each time the Count Up button is pressed, the counter value increases and is stored in NVS. The Reset button clears the stored count and sets the counter back to zero.
+
+
+<img src="./attachments/circuit_nvs.png" />
+
+Now let's create the program for our application
+
+
+```c
+#include <stdio.h>
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+void set_counter(int32_t val){
+    nvs_handle_t my_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err == ESP_OK) {
+        nvs_set_i32(my_handle, "counter", val);
+        nvs_commit(my_handle);
+        nvs_close(my_handle);
+    }
+}
+
+
+void app_main(void) {
+    gpio_reset_pin(5);
+    gpio_reset_pin(4);
+
+    gpio_set_direction(4, GPIO_MODE_INPUT);
+    gpio_set_direction(5, GPIO_MODE_INPUT);
+
+    gpio_set_pull_mode(5,GPIO_PULLDOWN_ONLY);
+    gpio_set_pull_mode(4,GPIO_PULLDOWN_ONLY);
+    
+    
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        err = nvs_flash_init();
+    }
+
+    nvs_handle_t my_handle;
+    int32_t counter = 0;
+
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err == ESP_OK) {
+        nvs_get_i32(my_handle, "counter", &counter);
+        printf("counter  = %ld \n", counter);
+        nvs_close(my_handle);
+    }
+    
+    while (1){
+	    if(gpio_get_level(4)){
+			counter++;
+	        set_counter(counter);
+	        printf("counter  is now %ld.\n", counter);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+        
+	    }
+		if(gpio_get_level(5)){
+		    counter = 0;
+	        set_counter(counter);
+			printf("counter  reset to 0 \n count =  %ld.\n", counter);
+	        vTaskDelay(500 / portTICK_PERIOD_MS);
+        }
+    }
+}
+```
+To work with NVS (Non-Volatile Storage), we first need to include the required libraries. In this example, we added two new header files: `nvs_flash.h` and `nvs.h`. These libraries provide the functions needed to initialize, read, write, and manage data stored in NVS memory.
+
+Inside `app_main()`, we begin by initializing the NVS flash using `nvs_flash_init()`. This prepares the flash memory so it can be used for data storage. We also check for possible initialization errors, such as running out of free pages or detecting an old NVS version. If either problem occurs, we erase the NVS partition and initialize it again.
+
+Next, we create an NVS handle (`my_handle`) and a variable named `counter` with a default value of `0`. The handle acts like a connection to the NVS storage. We then open an NVS namespace called `"storage"` using the `NVS_READWRITE` flag, which allows us to both read and write data. After opening the namespace, we retrieve the saved counter value using `nvs_get_i32()` and store it inside the `counter` variable. The value is printed to the terminal, and the NVS handle is closed afterward.
+
+The program then enters an infinite loop that continuously checks the state of the two buttons. When the button connected to GPIO 4 is pressed, the counter value increases by one. The updated value is stored in NVS using the `set_counter()` function, and the new counter value is printed to the terminal. When the button connected to GPIO 5 is pressed, the counter is reset to `0`, saved again to NVS, and the updated value is displayed.
+
+The `set_counter()` function is responsible for saving the counter value into NVS. It accepts one argument, `val`, which represents the value we want to store. Inside the function, we open the `"storage"` namespace, use `nvs_set_i32()` to save the integer value under the key `"counter"`, and then call `nvs_commit()` to permanently write the changes to flash memory. Finally, we close the NVS handle using `nvs_close()` to free the resources.
+
+NVS also supports strings, we can store strings by using `nvs_set_str()`
+```c
+char ssid[] = "MyWiFi";
+nvs_set_str(my_handle, "wifi_ssid", ssid);nvs_commit(my_handle);
+```
+To read string we use `nvs_get_str` since we not sure about the size of stored string we first use the function to retrive the size of string, then we create bugger with same size and read the string
+```c
+size_t required_size;
+nvs_get_str(my_handle, "wifi_ssid", NULL, &required_size);
+char *buffer = malloc(required_size);
+nvs_get_str(my_handle, "wifi_ssid", buffer, &required_size);
+printf("SSID: %s\n", buffer);
+free(buffer);
+```
+#### SPIFFS & LittleFS
+While NVS is excellent for tiny variables, it is terrible for large datasets. If we are building a web server and need to store HTML, CSS, and image files, or if we are logging thousands of temperature readings to a text file, we need a true File System.
+
+ESP-IDF primarily supports two file systems for internal Flash:
+- **SPIFFS (SPI Flash File System):** An older, widely used file system. It provides wear leveling but does not support true directories. If er create a file at `/data/logs/temp.txt`, SPIFFS simply treats the entire string `"/data/logs/temp.txt"` as the file name.
+- **LittleFS:** A newer, highly reliable file system designed specifically for microcontrollers. Unlike SPIFFS, LittleFS supports actual directory structures, is significantly faster, and is highly resilient to power loss during write operations. Because of its superior performance and safety, LittleFS is generally recommended over SPIFFS for modern ESP32-S3 projects.
+
+#### Working with LittleFS
+By default, ESP-IDF does not reserve any flash memory for a custom file system. To use LittleFS, we need to create a custom partition table that allocates a dedicated region of flash memory for storage.
+
+Create a file named `partitions.csv` in the root of the project directory next to `CMakeLists.txt` with the following content:
+```csv
+# Name, Type, SubType, Offset, Size, Flags
+nvs, data, nvs, , 0x6000,
+phy_init, data, phy, , 0x1000,
+factory, app, factory, , 1M,
+storage, data, spiffs, , 1M,
+```
+In this table, the `storage` partition defines a 1 MB flash region that will be used by LittleFS. Even though the subtype is listed as `spiffs`, the partition can still be mounted and used with LittleFS.
+
+Next, we need to tell ESP-IDF to use our custom partition table and include the `esp_littlefs` component in the project. We can do this using the ESP-IDF Component Manager by creating a file named `idf_component.yml` inside the `main/` directory.
+
+The ESP-IDF Component Manager will automatically download and integrate the LittleFS component during the build process.
+```
+dependencies:
+ espressif/esp_littlefs: "^1.1.0"
+```
+After that, enable the custom partition table configuration by running the following command in the terminal:
+```
+idf.py menuconfig
+```
+Inside the configuration menu, navigate to:
+```
+Partition Table -> Partition Table
+```
+Then change the option from:
+```
+Single factory app, no OTA
+```
+To:
+```
+Custom partition table CSV
+```
+Finally, save the configuration and exit the menu.
+
+
+Now that LittleFS storage is configured, we can start using it in our project . ESP-IDF integrates LittleFS with the Virtual File System (VFS) layer, which means we can use standard C file functions such as `fopen()`, `fprintf()`, `fgets()`, and `fclose()` exactly like we would on a desktop system.     
+
+The following example demonstrates the complete workflow:
+- Mounting the LittleFS partition
+- Creating and writing to a file
+- Reading the file back
+- Unmounting the file system
+```c
+#include <stdio.h>
+#include <string.h>
+
+#include "esp_littlefs.h"
+
+void app_main(void) {
+
+    // 1. Configure the LittleFS mount
+    esp_vfs_littlefs_conf_t conf = {
+        .base_path = "/littlefs",       // The root path we will use in code
+        .partition_label = "storage",   // Must match the name in partitions.csv
+        .format_if_mount_failed = true, // Format the partition if it's empty/corrupted
+        .dont_mount = false,
+    };
+    // 2. Initialize and mount the file system
+    esp_err_t ret = esp_vfs_littlefs_register(&conf);
+
+    if (ret != ESP_OK) {
+        printf("Failed to mount or format filesystem\n");
+        return;
+    }
+
+    printf("LittleFS mounted successfully.\n");
+
+    // 3. Write a file (standard C library functions)
+    printf("Opening file for writing...\n");
+    FILE *f = fopen("/littlefs/hello.txt", "w");
+
+    if (f == NULL) {
+        printf("Failed to open file for writing\n");
+        return;
+    }
+    
+    fprintf(f, "Hello World from LittleFS on ESP32-S3!\n");
+    fclose(f);
+    
+    printf("File written.\n");
+    // 4. Read the file back
+    printf("Opening file for reading...\n");
+    
+    f = fopen("/littlefs/hello.txt", "r");
+    if (f == NULL) {
+        printf("Failed to open file for reading\n");
+        return;
+    }
+    char line[64];
+    fgets(line, sizeof(line), f);
+    fclose(f);
+    
+    // Remove newline character if present
+    char *pos = strchr(line, '\n');
+    if (pos) {
+        *pos = '\0';
+    }
+    printf("Read from file: '%s'\n", line);
+    // 5. Unmount (optional, usually done before a system reboot)
+    esp_vfs_littlefs_unregister(conf.partition_label);
+}
+```
+The first step is creating an `esp_vfs_littlefs_conf_t` configuration structure. This tells ESP-IDF how the file system should be mounted. The `base_path` field defines the virtual directory where the file system will appear in our application, while `partition_label` must match the partition name defined in `partitions.csv`.
+
+The `format_if_mount_failed` option is especially useful during development. If the partition is empty or corrupted, ESP-IDF will automatically format it instead of failing to mount.
+
+Next, we mount the file system using `esp_vfs_littlefs_register()`. If the mount succeeds, the partition becomes accessible through the VFS layer, allowing us to use standard C file operations.
+
+To create a file, we use `fopen()` with write mode (`"w"`). The file path starts with `/littlefs/` because that is the mount point we configured earlier. We then write text into the file using `fprintf()` and close it with `fclose()` to ensure the data is saved properly.
+
+After writing, the example reopens the same file in read mode (`"r"`). The `fgets()` function reads the file contents into a character buffer, which we then print to the serial monitor.
+
+Finally, we unmount the file system using `esp_vfs_littlefs_unregister()`. This step is optional in many embedded applications, but it is good practice before restarting the device or shutting down the system.
+
+#### Raw Flash Partition Access
+While filesystems like LittleFS and SPIFFS are excellent for managing files and directories, they introduce overhead. If we need to log massive arrays of raw sensor metrics, stream binary data at high speeds, or manage custom cryptographic blobs, bypassing the Virtual File System (VFS) entirely gives us absolute control and maximum performance.
+
+Accessing raw flash memory allows us to read and write directly to specific physical sectors of the SPI flash chip via the ESP-IDF Partition API.
+
+#### The Rules of Raw Flash
+Working with raw flash is highly efficient, but it requires adherence to the physical constraints of NOR flash memory:
+- **Erase Before Write:** Flash memory cells can only be flipped from a logical `1` to a `0` during a write operation. To turn a `0` back into a `1`, the entire sector must be erased. We cannot overwrite an existing byte without erasing its sector first.
+- **Sector Alignment:** Erase operations cannot target individual bytes; they operate strictly on **4 KB sectors** (4096 bytes). Any erase offset and size must be perfectly aligned to a 4 KB boundary.
+- **Wear Management:** Unlike LittleFS, raw partition access does not automatically include wear leveling. Writing continuously to the exact same sector will prematurely degrade that area of the flash chip.
+
+#### Configuring a Raw Partition
+To prevent the application from accidentally overwriting system code or NVS data, we must allocate a dedicated sandbox partition in our custom configuration.
+
+In `partitions.csv` file we add a custom data entry:
+```
+# Name, Type, SubType, Offset, Size, Flags
+nvs, data, nvs, , 0x6000,
+phy_init, data, phy, , 0x1000,
+factory, app, factory, , 1M,
+raw_data, data, 0x99, , 256K,
+```
+In this setup, we define a partition labeled `raw_data`. We use the generic `data` type, and assign a custom hexadecimal subtype (`0x99`) to clearly define it as a non-filesystem, raw storage space. Its size is restricted to 256 KB.
+#### Reading and Writing Raw Flash
+To interact with this partition, include the `esp_partition.h` header. The workflow involves locating the partition by its label, erasing the target sector, writing binary data, and reading it back.
+
+The following example demonstrates a safe raw flash transaction:
+```c
+#include <stdio.h>  
+#include <string.h>  
+  
+#include "esp_partition.h"  
+  
+void app_main(void) {  
+  
+	// 1. Find the custom partition  
+	const esp_partition_t *partition =  esp_partition_find_first(  
+		ESP_PARTITION_TYPE_DATA,  
+		0x40,  
+		"storage"  
+	);  
+  
+	if (partition == NULL) {  
+		printf("Partition not found\n");  
+		return;  
+	}  
+  
+	printf("Partition found: %s\n", partition->label);  
+  
+	// 2. Data to write  
+	const char *message = "Hello from raw flash memory!";  
+  
+	// 3. Erase flash sector before writing  
+	esp_err_t ret = esp_partition_erase_range(  
+		partition,  
+		0,  
+		4096  
+	);  
+  
+	if (ret != ESP_OK) {  
+		printf("Failed to erase partition\n");  
+		return;  
+	}  
+  
+	// 4. Write data to flash  
+	ret = esp_partition_write(  
+		partition,  
+		0,  
+		message,  
+		strlen(message) + 1  
+	);  
+  
+	if (ret != ESP_OK) {  
+		printf("Failed to write data\n");  
+		return;  
+	}  
+  
+	printf("Data written successfully.\n");  
+  
+	// 5. Read data back  
+	char buffer[64];  
+  
+	ret = esp_partition_read(  
+		partition,  
+		0,  
+		buffer,  
+		sizeof(buffer)  
+	);  
+  
+	if (ret != ESP_OK) {  
+		printf("Failed to read data\n");  
+		return;  
+	}  
+  
+	printf("Read from flash: '%s'\n", buffer);  
+}
+```
+The first step is locating the partition using `esp_partition_find_first()`. We search for a partition with type `ESP_PARTITION_TYPE_DATA`, subtype `0x40`, and label `"storage"`.
+
+If the partition exists, ESP-IDF returns a pointer to an `esp_partition_t` structure containing information about the partition, including its address, size, and label.
+
+Before writing to flash memory, we must erase the target region using `esp_partition_erase_range()`. Flash memory cannot overwrite existing data directly. Instead, flash sectors must first be erased, typically in 4 KB blocks.
+
+After erasing the sector, we write raw bytes into flash using `esp_partition_write()`. In this example, we store a simple text string, but the same method can be used for binary structures, arrays, or serialized objects.
+
+To verify the operation, we read the data back using `esp_partition_read()`. The data is copied into a RAM buffer and printed to the serial monitor.
+
+Unlike LittleFS or SPIFFS, raw flash access does not provide files, folders, or automatic memory management. Everything is handled manually, which makes this method extremely powerful but also more error-prone if offsets and erase operations are not carefully managed.
+
+
+#### Flash Degradation 
+Just as heap fragmentation is a danger to RAM, Flash wear is the main danger to non-volatile storage.
+
+Flash memory physically degrades over time. Every time we erase and write a sector, the silicon takes a tiny bit of microscopic damage. A typical Flash chip is rated for about 100,000 erase/write cycles per sector.
+
+If we were to log a temperature reading to the exact same raw Flash address every second, we would destroy that specific sector of the Flash chip in just over a day. To prevent this, NVS, SPIFFS, and LittleFS all utilize **wear leveling**. Wear leveling algorithms secretly map our data to different physical locations behind the scenes, ensuring that writes are spread out evenly across the entire chip, significantly extending the life of our hardware.
