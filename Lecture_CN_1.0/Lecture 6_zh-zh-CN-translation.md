@@ -912,19 +912,19 @@ idf.py menuconfig
 在配置菜单中，导航至：
 
 ```
-分区表 -> 分区表
+Partition Table -> Partition Table
 ```
 
 然后将选项从：
 
 ```
-单一工厂应用，无 OTA
+Single factory app, no OTA
 ```
 
 更改为：
 
 ```
-自定义分区表 CSV
+Custom partition table CSV
 ```
 
 最后，保存配置并退出菜单。
