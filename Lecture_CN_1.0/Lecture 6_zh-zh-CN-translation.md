@@ -1035,7 +1035,7 @@ void app_main(void) {
 # 名称, 类型, 子类型, 偏移量, 大小, 标志
 nvs, data, nvs, , 0x6000,
 phy_init, data, phy, , 0x1000,
-工厂，应用，工厂，，1M，
+factory，app，factory，，1M，
 raw，data，0x99，，256K，
 ```
 
